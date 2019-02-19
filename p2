@@ -1,0 +1,235 @@
+DROP DATABASE IF EXISTS hw456;
+CREATE DATABASE hw456;
+
+DROP TABLE IF EXISTS fundamentals CASCADE;
+DROP TABLE IF EXISTS prices CASCADE;
+DROP TABLE IF EXISTS securities CASCADE;
+
+CREATE TABLE fundamentals (
+	id INTEGER NOT NULL PRIMARY KEY,
+	symbol TEXT,
+	year_ending DATE ,
+	cash_and_cash_equivalents NUMERIC,
+	earning_before_interest_and_taxes NUMERIC,	
+	gross_margin INTEGER,
+	net_income NUMERIC,
+	total_assets NUMERIC,  
+	total_liabilities NUMERIC,
+	total_revenue NUMERIC,
+	year INTEGER,
+	e_p_s 	NUMERIC,
+	shares_outstanding FLOAT
+);
+
+CREATE TABLE prices(
+	day DATE,
+	symbol TEXT,
+	open NUMERIC,
+	close NUMERIC,
+	low NUMERIC,
+	high NUMERIC,
+	volume INTEGER
+	);
+	
+CREATE TABLE securities(
+	symbol TEXT,
+	company TEXT,
+	sector TEXT,
+	sub_industry TEXT, 
+	initial_trade_date DATE
+	);
+	
+	
+\COPY fundamentals FROM 'C:\Users\alikh\Desktop\Database\hw4\fundamentals.csv' DELIMITER ',' CSV HEADER;	
+\COPY prices FROM 'C:\Users\alikh\Desktop\Database\hw4\prices.csv' DELIMITER ',' CSV HEADER;
+\COPY securities FROM 'C:\Users\alikh\Desktop\Database\hw4\securities.csv' DELIMITER ',' CSV HEADER;
+
+
+--SELECT * FROM fundamentals LIMIT 5;
+--SELECT * FROM prices LIMIT 3;
+--SELECT * FROM securities LIMIT 5;
+
+DROP TABLE IF EXISTS year_end_prices;
+
+CREATE TABLE year_end_prices AS   	   
+      SELECT symbol, day, close
+      FROM prices 
+      WHERE day::text LIKE '%-12-31'      --   <- Notice conversion of date to text, so can string-match with LIKE
+          OR day::text LIKE '2011-12-30'
+			OR day::text LIKE '2016-12-30'		   
+		       --  <- A pain, but trading ended on Dec 30 in 2011, and Dec 31 in the rest of the years.
+      ORDER BY symbol, day
+      ;
+      
+      
+DROP TABLE IF EXISTS returns;
+
+CREATE TABLE returns AS
+	SELECT *, 
+      LAG(close) OVER (PARTITION BY symbol ORDER BY day) AS prev_yr_close
+      FROM year_end_prices
+      ;      
+
+DROP TABLE IF EXISTS awesome_performers;
+
+CREATE TABLE awesome_performers AS     
+	SELECT *, (close/prev_yr_close-1)*100 AS annual  FROM returns
+	ORDER BY annual DESC NULLS LAST
+	LIMIT 30;
+
+--SELECT symbol, day, annual FROM awesome_performers;		
+	
+CREATE TEMP TABLE hnw AS
+SELECT symbol, year_ending, (total_assets - total_liabilities) AS net_worth
+		FROM fundamentals;
+
+/*		
+SELECT f.symbol, f.year_ending, f.net_worth
+	FROM awesome_performers a
+		INNER JOIN hnw f
+		ON a.symbol = f.symbol AND 
+				EXTRACT (YEAR FROM a.day) = (EXTRACT (YEAR FROM f.year_ending)+1)
+			ORDER BY net_worth DESC;
+*/	
+
+CREATE TEMP TABLE result AS
+--	SELECT symbol, EXTRACT (YEAR FROM year_ending), net_income, 
+--	LAG(net_income) OVER (PARTITION BY symbol ORDER BY year_ending) AS last_year
+--		 FROM fundamentals;
+		 
+SELECT f.symbol, EXTRACT (YEAR FROM f.year_ending), f.net_income, 
+				f.total_revenue, f.e_p_s, 
+				(f.cash_and_cash_equivalents/f.total_liabilities) AS cash_l  
+	FROM fundamentals f
+		INNER JOIN awesome_performers a
+			ON f.symbol = a.symbol 
+				AND (EXTRACT (YEAR FROM a.day) = (EXTRACT (YEAR FROM f.year_ending)+1)
+				OR EXTRACT (YEAR FROM a.day) = (EXTRACT (YEAR FROM f.year_ending)))
+				ORDER BY symbol ASC;
+				
+ALTER TABLE result ALTER COLUMN cash_l TYPE numeric(10, 2)
+    USING (cash_l::numeric(10, 2));	
+    
+CREATE TEMP TABLE pte_ratio AS
+	SELECT y.symbol, y.day, (y.close/d.e_p_s) AS ratio
+		FROM year_end_prices y
+			INNER JOIN fundamentals d 
+				ON y.symbol = d.symbol AND y.day = d.year_ending
+					INNER JOIN awesome_performers x 
+						ON d.symbol = x.symbol 
+				AND (EXTRACT (YEAR FROM x.day) = (EXTRACT (YEAR FROM d.year_ending)+1))
+				ORDER BY symbol ASC; 
+ALTER TABLE pte_ratio ALTER COLUMN ratio TYPE numeric(10, 4)
+    USING (ratio::numeric(10, 4));
+
+DROP TABLE IF EXISTS solut;	
+CREATE TABLE solut AS
+SELECT o.symbol, o.net_income, (o.cash_and_cash_equivalents/o.total_liabilities) AS cash_l, o.e_p_s,
+			s.sector 
+	FROM fundamentals o
+		INNER JOIN securities s
+				ON o.symbol = s.symbol
+		WHERE o.year_ending::text LIKE '2016-%-%' 		
+			ORDER BY e_p_s DESC NULLS LAST;		
+	
+			
+			DELETE FROM solut a USING (
+      SELECT MIN(ctid) as ctid, sector
+        FROM solut 
+        GROUP BY sector HAVING COUNT(*) > 1
+      ) b
+      WHERE a.sector = b.sector
+      AND a.ctid <> b.ctid;
+				
+				
+--SELECT * FROM solut LIMIT 10;
+
+
+CREATE TEMP TABLE table_a AS
+	SELECT day, symbol, close 
+	FROM prices
+	WHERE symbol = 'MCK' 
+	AND day::text LIKE '2016-%-%'
+		; 
+
+CREATE TEMP TABLE table_b AS
+	SELECT day, symbol AS sname, close 
+	FROM prices
+	WHERE symbol = 'MON' 
+	AND day::text LIKE '2016-%-%'; 
+
+DROP TABLE IF EXISTS table_c;
+
+CREATE TABLE table_c AS
+	SELECT a.day, a.symbol, a.close AS close_A, b.sname, b.close AS close_B
+		FROM table_a a
+		INNER JOIN table_b b
+		ON a.day = b.day; 	
+
+SELECT CORR(close_A, close_B) FROM table_c;	
+
+ 
+ /*
+ My investment choice here based on earning_per_share and cash/liabilities and 
+ net_income. I used delete function in order to get different sectors.
+ 
+ symbol | net_income  |         cash_l         | e_p_s |         sector
+--------+-------------+------------------------+-------+------------------------
+ AZO    |  1241007000 | 0.01826591543058487147 | 41.52 | Consumer Discretionary
+ MCK    |  2258000000 | 0.08497239656583891350 |  9.82 | Health Care
+ AAPL   | 45687000000 | 0.10613471502590673575 |  8.35 | Information Technology
+ AYI    |   290800000 | 0.32075764632820990529 |  6.67 | Industrials
+ SJM    |   688700000 | 0.01223316547083203351 |  5.77 | Consumer Staples
+ MON    |  1336000000 | 0.11024865149322457571 |  3.02 | Materials
+ HRB    |   374267000 | 0.35309587846495114779 |   1.5 | Financials
+ HP     |   -56828000 | 0.39873338576034281276 | -0.54 | Energy
+(8 rows)
+*/
+	
+
+	
+DROP VIEW IF EXISTS view1;
+
+CREATE VIEW view1 AS 
+	SELECT k.day, k.symbol, s.company, s.sector, k.close 
+		FROM prices k 
+			INNER JOIN securities s 
+			ON k.symbol = s.symbol 
+				INNER JOIN solut w 
+				ON s.symbol = w.symbol
+		WHERE k.day = CURRENT_DATE;
+		
+		
+ 
+      
+DROP TABLE IF EXISTS investment_r;
+
+CREATE TABLE investment_r AS
+	SELECT symbol, day, close 
+      FROM prices 
+      WHERE day::text LIKE '2017-12-29'
+      OR day::text LIKE '2016-12-30'
+      ;
+      
+      
+DROP TABLE IF EXISTS prices16;
+
+CREATE TABLE prices16 AS
+	SELECT *, 
+      LAG(close) OVER (PARTITION BY symbol ORDER BY day) AS end_price16
+      FROM investment_r
+      ;      
+
+DROP TABLE IF EXISTS return17;
+
+CREATE TABLE return17 AS     
+	SELECT *, (close/end_price16-1)*100 AS annual  FROM prices16
+	ORDER BY annual DESC NULLS LAST
+	LIMIT 8;
+	
+SELECT * FROM return17
+	ORDER BY annual DESC NULLS LAST
+	LIMIT 8;	
+	
+	
+SELECT sum(annual) FROM return17;
