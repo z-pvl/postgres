@@ -1,0 +1,43 @@
+DROP TABLE IF EXISTS codes;
+
+CREATE TABLE codes (
+	zip INTEGER NOT NULL PRIMARY KEY,
+	total_pop INTEGER,
+	median_age FLOAT,
+	total_males INTEGER,
+	total_females INTEGER,
+	total_households INTEGER,
+	ave_household_size FLOAT
+	);
+	
+\COPY codes FROM 'C:\Users\alikh\Desktop\Database\hw7\census.csv' WITH (FORMAT csv);	
+
+DROP TABLE IF EXISTS target;
+CREATE TABLE target AS
+	SELECT zip, total_pop, median_age, ((total_males::FLOAT)/(total_pop::FLOAT)) AS male_pct,
+		ave_household_size
+		FROM codes 
+		WHERE zip=93591;
+
+
+DROP TABLE IF EXISTS z_all;
+CREATE TABLE z_all AS
+	SELECT zip, total_pop, median_age, ((total_males::FLOAT)/(total_pop::FLOAT)) AS male_pct,
+		ave_household_size
+		FROM codes
+		WHERE total_pop != 0;
+
+
+DROP TABLE IF EXISTS answer;
+CREATE TABLE answer AS
+	SELECT z.zip, z.total_pop, z.median_age, z.male_pct::NUMERIC(10,3), z.ave_household_size,  
+		SQRT(((t.median_age-z.median_age)^2) + ((t.male_pct-z.male_pct)^2) + 
+		((t.ave_household_size-z.ave_household_size)^2))::NUMERIC(10,3) AS distance
+	FROM z_all z
+		CROSS JOIN target t
+	ORDER BY distance ASC;
+	
+SELECT ROW_NUMBER() OVER () AS num, * FROM answer
+	LIMIT 11;
+
+		 	
